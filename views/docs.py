@@ -8,11 +8,11 @@ from db import (
     get_all_documents, delete_document,
 )
 from parser import parse_pdf, extract_enacted_date
+from law_api import MANAGED_LAWS, update_single_law
 
 CATEGORIES = ["법령", "모범규준", "사규", "감독규정"]
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "uploads")
 
-# 모노톤 배지 색상
 CATEGORY_COLORS = {
     "법령":    "#1e40af",
     "모범규준": "#0369a1",
@@ -27,6 +27,22 @@ def render():
         '문서 관리</p>',
         unsafe_allow_html=True,
     )
+
+    # ── 전체 법령 업데이트 버튼 ───────────────────────────────────────────────
+    col_btn, col_desc = st.columns([2, 5])
+    with col_btn:
+        update_all = st.button("전체 법령 업데이트", type="primary", use_container_width=True)
+    with col_desc:
+        st.markdown(
+            '<p style="font-size:0.78rem;color:#888;padding-top:8px;">'
+            '법제처 오픈API로 법령·감독규정 최신화 (API 키 필요)</p>',
+            unsafe_allow_html=True,
+        )
+
+    if update_all:
+        _run_api_update(MANAGED_LAWS)
+
+    st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
     tab_upload, tab_list = st.tabs(["규정 업로드", "등록된 규정"])
 
@@ -73,7 +89,8 @@ def render():
                             f.write(pdf_bytes.read())
 
                         doc_id = upsert_document(
-                            doc_name.strip(), doc_category, uploaded_file.name, enacted_date
+                            doc_name.strip(), doc_category, uploaded_file.name,
+                            enacted_date, source_type="pdf",
                         )
                         insert_articles(doc_id, articles)
                         update_article_count(doc_id, len(articles))
@@ -96,25 +113,47 @@ def render():
                 unsafe_allow_html=True,
             )
 
+            # 개별 업데이트 버튼 (API 문서만)
+            api_docs = [d for d in docs if d.get("source_type") == "api"]
+            if api_docs:
+                with st.expander("개별 법령 업데이트"):
+                    for law in MANAGED_LAWS:
+                        matched = next((d for d in api_docs if d["doc_name"] == law["name"]), None)
+                        label = f"업데이트 — {law['name']}"
+                        if st.button(label, key=f"upd_{law['name']}"):
+                            _run_api_update([law])
+
             # HTML 테이블
             rows_html = ""
             for i, doc in enumerate(docs):
                 color = CATEGORY_COLORS.get(doc["doc_category"], "#666")
-                badge = (
+                cat_badge = (
                     f'<span style="background:{color};color:#fff;'
                     f'padding:2px 8px;border-radius:3px;font-size:0.72rem;'
                     f'font-weight:500;letter-spacing:0.02em;white-space:nowrap;">'
                     f'{doc["doc_category"]}</span>'
                 )
+
+                source_type = doc.get("source_type", "pdf")
+                src_color = "#0f766e" if source_type == "api" else "#6b7280"
+                src_label = "API" if source_type == "api" else "PDF"
+                src_badge = (
+                    f'<span style="background:{src_color};color:#fff;'
+                    f'padding:2px 6px;border-radius:3px;font-size:0.68rem;'
+                    f'font-weight:600;letter-spacing:0.03em;">'
+                    f'{src_label}</span>'
+                )
+
                 enacted  = doc.get("enacted_date") or "—"
-                uploaded = doc["uploaded_at"][:10] if doc["uploaded_at"] else "—"
+                uploaded = doc["uploaded_at"][:10] if doc.get("uploaded_at") else "—"
                 bg = "#fff" if i % 2 == 0 else "#fafafa"
 
                 rows_html += (
                     f'<tr style="background:{bg};">'
                     f'<td style="padding:10px 14px;font-size:0.85rem;font-weight:600;color:#1a1a1a;">'
                     f'{doc["doc_name"]}</td>'
-                    f'<td style="padding:10px 14px;text-align:center;">{badge}</td>'
+                    f'<td style="padding:10px 14px;text-align:center;">{cat_badge}</td>'
+                    f'<td style="padding:10px 14px;text-align:center;">{src_badge}</td>'
                     f'<td style="padding:10px 14px;text-align:center;font-size:0.82rem;color:#555;">'
                     f'{doc["article_count"]}</td>'
                     f'<td style="padding:10px 14px;text-align:center;font-size:0.82rem;color:#555;">'
@@ -150,11 +189,12 @@ def render():
             <table class="reg-table">
                 <thead>
                     <tr>
-                        <th style="width:36%;">문서명</th>
-                        <th style="width:13%;">분류</th>
-                        <th style="width:9%;">조문 수</th>
+                        <th style="width:34%;">문서명</th>
+                        <th style="width:12%;">분류</th>
+                        <th style="width:8%;">소스</th>
+                        <th style="width:8%;">조문 수</th>
                         <th style="width:16%;">시행일</th>
-                        <th style="width:16%;">업로드일</th>
+                        <th style="width:16%;">업데이트일</th>
                     </tr>
                 </thead>
                 <tbody>{rows_html}</tbody>
@@ -189,3 +229,23 @@ def render():
                         st.session_state.pop("confirm_del_id", None)
                         st.session_state.pop("confirm_del_name", None)
                         st.rerun()
+
+
+def _run_api_update(laws: list[dict]):
+    """법령 목록을 순서대로 API 수신하여 DB에 저장."""
+    progress = st.progress(0, text="업데이트 준비 중...")
+    results = []
+    for i, law in enumerate(laws):
+        progress.progress((i) / len(laws), text=f"수신 중: {law['name']}")
+        try:
+            count, eff_date = update_single_law(law)
+            results.append(f"✅ {law['name']} — {count}개 조문 (시행일: {eff_date or '미확인'})")
+        except Exception as e:
+            results.append(f"❌ {law['name']} — 오류: {e}")
+    progress.progress(1.0, text="완료")
+    for msg in results:
+        if msg.startswith("✅"):
+            st.success(msg)
+        else:
+            st.error(msg)
+    st.rerun()

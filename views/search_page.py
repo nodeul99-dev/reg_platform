@@ -160,34 +160,58 @@ def _render_article_card(row: dict, keyword: str):
     doc_category   = row["doc_category"]
     page_number    = row["page_number"]
     article_text   = row["article_text"]
-    filename       = row["filename"]
+    filename       = row.get("filename") or ""
+    source_type    = row.get("source_type", "pdf")
+    enacted_date   = row.get("enacted_date") or ""
 
     title_str   = f" ({article_title})" if article_title else ""
     badge       = category_badge(doc_category)
     highlighted = highlight_text(article_text, keyword)
 
-    if keyword and filename:
-        pdf_url = get_highlighted_pdf_url(filename, keyword, row["doc_id"], page_number)
-    else:
-        pdf_url = f"/app/static/uploads/{urllib.parse.quote(filename)}#page={page_number}"
+    # 소스 배지 (API vs PDF)
+    src_color = "#0f766e" if source_type == "api" else "#6b7280"
+    src_label = "API" if source_type == "api" else "PDF"
+    src_badge = (
+        f'<span style="background:{src_color};color:#fff;'
+        f'padding:1px 6px;border-radius:3px;font-size:0.68rem;font-weight:600;">'
+        f'{src_label}</span>'
+    )
 
-    card_html = f"""
-    <a href="{pdf_url}" target="_blank" style="text-decoration:none;color:inherit;">
+    # 시행일 표시
+    date_text = f'시행 {enacted_date}' if enacted_date else ""
+
+    # PDF 카드: 링크 포함 / API 카드: 링크 없음
+    is_pdf = source_type == "pdf" and filename
+    if is_pdf and keyword:
+        pdf_url = get_highlighted_pdf_url(filename, keyword, row["doc_id"], page_number)
+    elif is_pdf:
+        pdf_url = f"/app/static/uploads/{urllib.parse.quote(filename)}#page={page_number}"
+    else:
+        pdf_url = None
+
+    footer_right = (
+        f'<span style="color:#a5b4fc;font-size:0.72rem;">p.{page_number}</span>'
+        if page_number else ""
+    )
+
+    inner_html = f"""
     <div style="
         border: 1px solid #dde9ff;
         border-radius: 6px;
         padding: 14px 18px 12px;
         margin-bottom: 12px;
         background: #fff;
-        cursor: pointer;
+        {"cursor: pointer;" if pdf_url else ""}
         transition: border-color 0.15s, box-shadow 0.15s;
     "
-    onmouseover="this.style.borderColor='#93c5fd';this.style.boxShadow='0 2px 12px rgba(37,99,235,0.09)';"
-    onmouseout="this.style.borderColor='#dde9ff';this.style.boxShadow='none';"
+    {"onmouseover=\"this.style.borderColor='#93c5fd';this.style.boxShadow='0 2px 12px rgba(37,99,235,0.09)';\"" if pdf_url else ""}
+    {"onmouseout=\"this.style.borderColor='#dde9ff';this.style.boxShadow='none';\"" if pdf_url else ""}
     >
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
             <span style="font-size:0.78rem;font-weight:400;color:#888;">{doc_name}</span>
             {badge}
+            {src_badge}
+            {"<span style='font-size:0.72rem;color:#94a3b8;margin-left:2px;'>" + html.escape(date_text) + "</span>" if date_text else ""}
         </div>
         <div style="font-size:0.92rem;font-weight:700;color:#0f2744;margin-bottom:8px;">
             {article_number}{title_str}
@@ -198,10 +222,15 @@ def _render_article_card(row: dict, keyword: str):
         ">
             {highlighted}
         </div>
-        <div style="text-align:right;color:#a5b4fc;font-size:0.72rem;margin-top:8px;">
-            p.{page_number}
+        <div style="text-align:right;margin-top:8px;">
+            {footer_right}
         </div>
     </div>
-    </a>
     """
+
+    if pdf_url:
+        card_html = f'<a href="{pdf_url}" target="_blank" style="text-decoration:none;color:inherit;">{inner_html}</a>'
+    else:
+        card_html = inner_html
+
     st.markdown(card_html, unsafe_allow_html=True)

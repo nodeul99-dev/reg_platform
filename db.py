@@ -41,12 +41,15 @@ def init_db():
         cols = [r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()]
         if "enacted_date" not in cols:
             conn.execute("ALTER TABLE documents ADD COLUMN enacted_date TEXT")
+        if "source_type" not in cols:
+            conn.execute("ALTER TABLE documents ADD COLUMN source_type TEXT NOT NULL DEFAULT 'pdf'")
 
 
 # ── 문서 CRUD ──────────────────────────────────────────────────────────────
 
 def upsert_document(
-    doc_name: str, doc_category: str, filename: str, enacted_date: str | None = None
+    doc_name: str, doc_category: str, filename: str,
+    enacted_date: str | None = None, source_type: str = "pdf",
 ) -> int:
     """동일 문서명+분류가 있으면 기존 조문 삭제 후 재삽입, 없으면 신규 삽입."""
     with get_conn() as conn:
@@ -58,13 +61,13 @@ def upsert_document(
             doc_id = row["id"]
             conn.execute("DELETE FROM articles WHERE doc_id = ?", (doc_id,))
             conn.execute(
-                "UPDATE documents SET filename = ?, uploaded_at = ?, enacted_date = ? WHERE id = ?",
-                (filename, datetime.now().isoformat(), enacted_date, doc_id),
+                "UPDATE documents SET filename = ?, uploaded_at = ?, enacted_date = ?, source_type = ? WHERE id = ?",
+                (filename, datetime.now().isoformat(), enacted_date, source_type, doc_id),
             )
         else:
             cur = conn.execute(
-                "INSERT INTO documents (doc_name, doc_category, filename, enacted_date) VALUES (?, ?, ?, ?)",
-                (doc_name, doc_category, filename, enacted_date),
+                "INSERT INTO documents (doc_name, doc_category, filename, enacted_date, source_type) VALUES (?, ?, ?, ?, ?)",
+                (doc_name, doc_category, filename, enacted_date, source_type),
             )
             doc_id = cur.lastrowid
     return doc_id
@@ -131,7 +134,7 @@ def search_articles(keyword: str, categories: list[str] | None = None) -> list[d
 
     sql = f"""
         SELECT a.id, a.doc_id, a.article_number, a.article_title, a.article_text, a.page_number,
-               d.doc_name, d.doc_category, d.filename
+               d.doc_name, d.doc_category, d.filename, d.source_type, d.enacted_date
         FROM articles a
         JOIN documents d ON a.doc_id = d.id
         WHERE a.article_text LIKE ?{placeholders}
