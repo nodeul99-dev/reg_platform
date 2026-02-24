@@ -14,6 +14,8 @@ ARTICLE_PATTERN = re.compile(r"^(제\s*\d+조(?:의\s*\d+)?)")
 TITLE_PATTERN = re.compile(r"제\s*\d+조(?:의\s*\d+)?\s*[（(]([^）)\n]+)[）)]")
 # 목차 항목 판별: 점선(...··) 또는 탭+숫자(페이지번호) 패턴
 TOC_PATTERN = re.compile(r"[.·‥…]{3,}|\.{2,}\s*\d+\s*$")
+# 단락 구분자: 항/호/목 번호로 시작하는 줄 → 앞에 줄바꿈 삽입
+PARAGRAPH_START = re.compile(r"^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮]|^\d+\.\s|^[가나다라마바사아자차카타파하]\.\s")
 
 
 def extract_text_by_page(pdf_file: IO[bytes]) -> list[tuple[int, str]]:
@@ -77,7 +79,16 @@ def parse_articles(pages: list[tuple[int, str]]) -> list[dict]:
             }
         else:
             if current:
-                current["article_text"] += stripped + "\n"
+                # 항/호/목 번호로 시작하면 단락 구분 (줄바꿈)
+                # 그 외 일반 연속 줄은 공백으로 연결 (PDF 레이아웃 행바꿈 제거)
+                if PARAGRAPH_START.match(stripped):
+                    current["article_text"] += "\n" + stripped
+                else:
+                    # 직전 텍스트가 하이픈으로 끝나면 (단어 분리) 하이픈 제거 후 연결
+                    if current["article_text"].endswith("-"):
+                        current["article_text"] = current["article_text"][:-1] + stripped
+                    else:
+                        current["article_text"] += " " + stripped
             # 조문 시작 전 텍스트는 무시
 
     # 마지막 조문 저장
